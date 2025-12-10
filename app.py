@@ -14,12 +14,16 @@ from typing import Optional, Dict, Any
 # Import data pipeline modules
 from data_pipeline.clean_amazon_sales import clean_amazon_sales
 from data_pipeline.clean_tiktok_sales import clean_tiktok_sales
-from data_pipeline.comments_tiktok import process_tiktok_comments
-from data_pipeline.comments_reddit import fetch_reddit_comments, process_reddit_comments, combine_comments
-from data_pipeline.reviews_amazon import process_amazon_reviews
-from data_pipeline.reviews_tiktok import process_tiktok_reviews, combine_reviews
+from data_pipeline.comments_tiktok import clean_tiktok_comments, summarize_tiktok_comments
+from data_pipeline.comments_reddit import clean_reddit_comments, summarize_reddit_comments
+from data_pipeline.reviews_amazon import clean_amazon_reviews, summarize_amazon_reviews
+from data_pipeline.reviews_tiktok import clean_tiktok_reviews, summarize_tiktok_reviews
 from data_pipeline.market_statistics import compute_market_statistics
-from data_pipeline.voc_statistics import compute_voc_statistics
+from data_pipeline.voc_statistics import (
+    compute_voc_statistics,
+    compute_comment_statistics,
+    compute_review_statistics
+)
 
 # Import AI modules
 from ai.debate_orchestrator import DebateOrchestrator, create_master_summary
@@ -53,10 +57,10 @@ if 'amazon_sales_df' not in st.session_state:
     st.session_state.amazon_sales_df = None
 if 'tiktok_sales_df' not in st.session_state:
     st.session_state.tiktok_sales_df = None
-if 'comments_df' not in st.session_state:
-    st.session_state.comments_df = None
-if 'reviews_df' not in st.session_state:
-    st.session_state.reviews_df = None
+if 'comment_stats' not in st.session_state:
+    st.session_state.comment_stats = None
+if 'review_stats' not in st.session_state:
+    st.session_state.review_stats = None
 if 'market_stats' not in st.session_state:
     st.session_state.market_stats = None
 if 'voc_stats' not in st.session_state:
@@ -144,11 +148,14 @@ def stage2_comments_analysis():
     """Stage 2: Comments Analysis (TikTok + Reddit)"""
     st.header("💬 Stage 2: User Comments Analysis")
     st.markdown("""
-    Upload TikTok video comments and optionally fetch Reddit comments to understand
+    Upload TikTok video comments and optionally upload Reddit comments to understand
     user opinions, reasons to buy/not buy, and usage scenarios.
     """)
     
     col1, col2 = st.columns(2)
+    
+    tiktok_summary = None
+    reddit_summary = None
     
     with col1:
         st.subheader("TikTok Comments")
@@ -158,66 +165,49 @@ def stage2_comments_analysis():
             key='tiktok_comments'
         )
         
-        tiktok_df = None
         if tiktok_comments_file:
             with st.spinner("Processing TikTok comments..."):
                 raw_df = load_data_file(tiktok_comments_file)
                 if raw_df is not None:
-                    tiktok_df = process_tiktok_comments(raw_df)
-                    st.success(f"✅ Loaded {len(tiktok_df)} TikTok comments")
+                    try:
+                        cleaned_df = clean_tiktok_comments(raw_df)
+                        tiktok_summary = summarize_tiktok_comments(cleaned_df)
+                        st.success(f"✅ Loaded {tiktok_summary['basic_stats']['total_comments']} TikTok comments")
+                        with st.expander("Preview data"):
+                            st.dataframe(cleaned_df.head())
+                    except Exception as e:
+                        st.error(f"Error processing TikTok comments: {str(e)}")
     
     with col2:
         st.subheader("Reddit Comments (Optional)")
         
-        with st.expander("Fetch from Reddit API"):
-            st.info("Set REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT in environment")
-            
-            keywords = st.text_input("Keywords (comma-separated)", "")
-            subreddits = st.text_input("Subreddits (comma-separated, or leave empty for all)", "")
-            
-            if st.button("Fetch Reddit Comments"):
-                if keywords:
-                    keyword_list = [k.strip() for k in keywords.split(',')]
-                    subreddit_list = [s.strip() for s in subreddits.split(',')] if subreddits else None
-                    
-                    with st.spinner("Fetching Reddit comments..."):
-                        reddit_raw = fetch_reddit_comments(keyword_list, subreddit_list)
-                        if not reddit_raw.empty:
-                            reddit_df = process_reddit_comments(reddit_raw)
-                            st.success(f"✅ Fetched {len(reddit_df)} Reddit comments")
-                        else:
-                            st.warning("No Reddit comments fetched. Check API credentials.")
-                            reddit_df = pd.DataFrame()
-                else:
-                    st.warning("Please enter keywords")
-                    reddit_df = pd.DataFrame()
-        
         reddit_file = st.file_uploader(
-            "Or upload Reddit comments CSV/XLSX",
+            "Upload Reddit comments CSV/XLSX",
             type=['csv', 'xlsx', 'xls'],
             key='reddit_comments'
         )
         
-        reddit_df = None
         if reddit_file:
             with st.spinner("Processing Reddit comments..."):
                 raw_df = load_data_file(reddit_file)
                 if raw_df is not None:
-                    reddit_df = process_reddit_comments(raw_df)
-                    st.success(f"✅ Loaded {len(reddit_df)} Reddit comments")
+                    try:
+                        cleaned_df = clean_reddit_comments(raw_df)
+                        reddit_summary = summarize_reddit_comments(cleaned_df)
+                        st.success(f"✅ Loaded {reddit_summary['basic_stats']['total_comments']} Reddit comments")
+                        with st.expander("Preview data"):
+                            st.dataframe(cleaned_df.head())
+                    except Exception as e:
+                        st.error(f"Error processing Reddit comments: {str(e)}")
     
-    # Combine and proceed
-    if tiktok_df is not None:
-        if reddit_df is not None and not reddit_df.empty:
-            st.session_state.comments_df = combine_comments(tiktok_df, reddit_df)
-        else:
-            st.session_state.comments_df = tiktok_df
-        
-        st.info(f"Total comments: {len(st.session_state.comments_df)}")
-        
-        if st.button("Next: Product Reviews", type="primary"):
-            st.session_state.stage = 3
-            st.rerun()
+    # Compute combined statistics and proceed
+    if tiktok_summary is not None:
+        if st.button("🔬 Compute Comment Statistics", type="primary"):
+            with st.spinner("Computing comment statistics..."):
+                st.session_state.comment_stats = compute_comment_statistics(tiktok_summary, reddit_summary)
+                st.success("✅ Comment statistics computed!")
+                st.session_state.stage = 3
+                st.rerun()
 
 
 def stage3_reviews_analysis():
@@ -230,6 +220,9 @@ def stage3_reviews_analysis():
     
     col1, col2 = st.columns(2)
     
+    amazon_summary = None
+    tiktok_summary = None
+    
     with col1:
         st.subheader("Amazon Reviews")
         amazon_reviews_file = st.file_uploader(
@@ -238,13 +231,18 @@ def stage3_reviews_analysis():
             key='amazon_reviews'
         )
         
-        amazon_reviews_df = None
         if amazon_reviews_file:
             with st.spinner("Processing Amazon reviews..."):
                 raw_df = load_data_file(amazon_reviews_file)
                 if raw_df is not None:
-                    amazon_reviews_df = process_amazon_reviews(raw_df)
-                    st.success(f"✅ Loaded {len(amazon_reviews_df)} Amazon reviews")
+                    try:
+                        cleaned_df = clean_amazon_reviews(raw_df)
+                        amazon_summary = summarize_amazon_reviews(cleaned_df)
+                        st.success(f"✅ Loaded {len(cleaned_df)} Amazon reviews")
+                        with st.expander("Preview data"):
+                            st.dataframe(cleaned_df.head())
+                    except Exception as e:
+                        st.error(f"Error processing Amazon reviews: {str(e)}")
     
     with col2:
         st.subheader("TikTok Shop Reviews")
@@ -254,32 +252,32 @@ def stage3_reviews_analysis():
             key='tiktok_reviews'
         )
         
-        tiktok_reviews_df = None
         if tiktok_reviews_file:
             with st.spinner("Processing TikTok reviews..."):
                 raw_df = load_data_file(tiktok_reviews_file)
                 if raw_df is not None:
-                    tiktok_reviews_df = process_tiktok_reviews(raw_df)
-                    st.success(f"✅ Loaded {len(tiktok_reviews_df)} TikTok reviews")
+                    try:
+                        cleaned_df = clean_tiktok_reviews(raw_df)
+                        tiktok_summary = summarize_tiktok_reviews(cleaned_df)
+                        st.success(f"✅ Loaded {len(cleaned_df)} TikTok reviews")
+                        with st.expander("Preview data"):
+                            st.dataframe(cleaned_df.head())
+                    except Exception as e:
+                        st.error(f"Error processing TikTok reviews: {str(e)}")
     
-    # Combine reviews
-    if amazon_reviews_df is not None or tiktok_reviews_df is not None:
-        if amazon_reviews_df is not None and tiktok_reviews_df is not None:
-            st.session_state.reviews_df = combine_reviews(amazon_reviews_df, tiktok_reviews_df)
-        elif amazon_reviews_df is not None:
-            st.session_state.reviews_df = amazon_reviews_df
-        else:
-            st.session_state.reviews_df = tiktok_reviews_df
-        
-        st.info(f"Total reviews: {len(st.session_state.reviews_df)}")
-        
-        if st.button("🔬 Compute VOC Statistics", type="primary"):
-            with st.spinner("Computing VOC statistics..."):
+    # Compute statistics and proceed
+    if amazon_summary is not None or tiktok_summary is not None:
+        if st.button("🔬 Compute Review Statistics", type="primary"):
+            with st.spinner("Computing review statistics..."):
+                st.session_state.review_stats = compute_review_statistics(amazon_summary, tiktok_summary)
+                
+                # Also compute combined VOC statistics
+                comment_stats = st.session_state.get('comment_stats', None)
                 st.session_state.voc_stats = compute_voc_statistics(
-                    comments_df=st.session_state.comments_df,
-                    reviews_df=st.session_state.reviews_df
+                    comments_summary=comment_stats,
+                    reviews_summary=st.session_state.review_stats
                 )
-                st.success("✅ VOC statistics computed!")
+                st.success("✅ Review statistics computed!")
                 st.session_state.stage = 4
                 st.rerun()
 
