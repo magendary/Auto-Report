@@ -11,6 +11,7 @@ from .charts import (
     plot_competition_metrics,
     plot_feature_performance,
     plot_platform_comparison,
+    plot_voc_summary,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     'plot_competition_metrics',
     'plot_feature_performance',
     'plot_platform_comparison',
+    'plot_voc_summary',
 ]
