@@ -137,7 +137,7 @@ def compute_price_vs_sales_correlation(df: pd.DataFrame) -> Dict[str, Any]:
     
     # Find sweet spot (price range with highest sales)
     df['price_bucket'] = pd.cut(df['price'], bins=10)
-    sweet_spots = df.groupby('price_bucket')['sales'].sum().sort_values(ascending=False).head(3)
+    sweet_spots = df.groupby('price_bucket', observed=True)['sales'].sum().sort_values(ascending=False).head(3)
     
     sweet_spot_ranges = []
     for bucket in sweet_spots.index:

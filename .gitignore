@@ -80,6 +80,10 @@ data/
 *.xlsx
 *.xls
 
+# Keep examples directory structure but ignore data files
+!examples/*.csv
+!examples/*.xlsx
+
 # Output files
 outputs/
 results/
