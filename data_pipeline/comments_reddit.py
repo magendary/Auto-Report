@@ -1,173 +1,113 @@
+# data_pipeline/comments_reddit.py
+# -*- coding: utf-8 -*-
 """
-Reddit Comments Fetching and Processing
+处理 Reddit 评论数据：
+- 输入：原始 DataFrame（支持多种导出格式）
+- 输出：标准字段：
+    - comment_text
+    - score      （相当于点赞数）
+    - created_at
+    - source = "reddit"
+"""
 
-This module fetches and processes Reddit threads and comments
-to extract user insights and opinions.
-"""
+from __future__ import annotations
+
+from typing import Dict, List
 
 import pandas as pd
-import numpy as np
-from typing import Dict, List, Any, Optional
-import os
-from datetime import datetime
-import re
 
 
-def fetch_reddit_comments(
-    keywords: List[str],
-    subreddits: Optional[List[str]] = None,
-    limit: int = 100
-) -> pd.DataFrame:
-    """
-    Fetch Reddit comments based on keywords.
-    
-    Args:
-        keywords: List of keywords to search for
-        subreddits: List of subreddits to search in (optional)
-        limit: Maximum number of comments to fetch
-        
-    Returns:
-        DataFrame with Reddit comments
-        
-    Note:
-        Requires Reddit API credentials set in environment variables:
-        - REDDIT_CLIENT_ID
-        - REDDIT_CLIENT_SECRET
-        - REDDIT_USER_AGENT
-    """
-    comments_data = []
-    
-    try:
-        import praw
-        
-        # Initialize Reddit API client
-        reddit = praw.Reddit(
-            client_id=os.getenv('REDDIT_CLIENT_ID', ''),
-            client_secret=os.getenv('REDDIT_CLIENT_SECRET', ''),
-            user_agent=os.getenv('REDDIT_USER_AGENT', 'AutoReport/1.0')
+COLUMN_ALIASES: Dict[str, List[str]] = {
+    "comment_text": ["body", "comment", "text", "selftext", "内容"],
+    "score": ["score", "ups", "upvotes", "点赞数"],
+    "created_at": ["created_utc", "created_at", "time", "日期", "timestamp"],
+}
+
+
+def _resolve_columns(df: pd.DataFrame) -> Dict[str, str]:
+    resolved: Dict[str, str] = {}
+    cols = list(df.columns)
+
+    for std_name, candidates in COLUMN_ALIASES.items():
+        for c in candidates:
+            if c in cols:
+                resolved[std_name] = c
+                break
+
+    if "comment_text" not in resolved:
+        raise ValueError(
+            f"无法在 Reddit 评论表中找到评论文本列。当前列名：{cols}"
         )
-        
-        # Default subreddits if none provided
-        if not subreddits:
-            subreddits = ['all']
-        
-        for keyword in keywords:
-            for subreddit_name in subreddits:
-                subreddit = reddit.subreddit(subreddit_name)
-                
-                # Search for posts containing the keyword
-                for submission in subreddit.search(keyword, limit=limit // len(keywords) // len(subreddits)):
-                    # Get top-level comments
-                    submission.comments.replace_more(limit=0)
-                    for comment in submission.comments.list()[:20]:
-                        if isinstance(comment, praw.models.Comment):
-                            comments_data.append({
-                                'text': comment.body,
-                                'upvotes': comment.score,
-                                'created_at': datetime.fromtimestamp(comment.created_utc),
-                                'user_id': str(comment.author) if comment.author else 'deleted',
-                                'subreddit': subreddit_name,
-                                'post_title': submission.title,
-                            })
-    
-    except ImportError:
-        print("Warning: praw library not installed. Reddit fetching disabled.")
-        print("Install with: pip install praw")
-    except Exception as e:
-        print(f"Error fetching Reddit comments: {e}")
-        print("Make sure REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, and REDDIT_USER_AGENT are set.")
-    
-    if not comments_data:
-        # Return empty DataFrame with expected structure
-        return pd.DataFrame(columns=['text', 'upvotes', 'created_at', 'user_id', 'source'])
-    
-    df = pd.DataFrame(comments_data)
-    df['source'] = 'reddit'
-    
-    return df
+
+    return resolved
 
 
-def process_reddit_comments(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Process and clean Reddit comments.
-    
-    Args:
-        df: Raw DataFrame with Reddit comments
-        
-    Returns:
-        Normalized DataFrame with cleaned comments
-    """
-    if df.empty:
-        return pd.DataFrame(columns=['text', 'likes', 'created_at', 'source'])
-    
-    # Normalize structure to match TikTok comments
-    normalized = pd.DataFrame()
-    
-    normalized['text'] = df['text'].astype(str).apply(clean_reddit_text)
-    normalized['likes'] = df.get('upvotes', 0)
-    
-    if 'created_at' in df.columns:
-        normalized['created_at'] = pd.to_datetime(df['created_at'], errors='coerce')
-    
-    normalized['source'] = 'reddit'
-    
-    # Filter valid comments
-    normalized = normalized[normalized['text'].str.len() >= 5]
-    
-    return normalized
+def clean_reddit_comments(raw_df: pd.DataFrame) -> pd.DataFrame:
+    if raw_df is None or raw_df.empty:
+        raise ValueError("Reddit 评论数据为空")
+
+    col_map = _resolve_columns(raw_df)
+
+    df = pd.DataFrame()
+    df["comment_text"] = raw_df[col_map["comment_text"]].astype(str).str.strip()
+
+    if "score" in col_map:
+        df["score"] = (
+            pd.to_numeric(raw_df[col_map["score"]], errors="coerce")
+            .fillna(0)
+            .astype(int)
+        )
+    else:
+        df["score"] = 0
+
+    if "created_at" in col_map:
+        df["created_at"] = pd.to_datetime(
+            raw_df[col_map["created_at"]], errors="coerce"
+        )
+    else:
+        df["created_at"] = pd.NaT
+
+    df = df[df["comment_text"].str.len() > 0].copy()
+    df["source"] = "reddit"
+    return df.reset_index(drop=True)
 
 
-def clean_reddit_text(text: str) -> str:
+def summarize_reddit_comments(df: pd.DataFrame) -> dict:
     """
-    Clean Reddit comment text.
-    
-    Args:
-        text: Raw comment text
-        
-    Returns:
-        Cleaned text
+    基础统计：
+    - total_comments
+    - total_score
+    - avg_score
+    - top_by_score
     """
-    if not isinstance(text, str):
-        return ""
-    
-    # Remove URLs
-    text = re.sub(r'http\S+|www.\S+', '', text)
-    
-    # Remove Reddit-specific formatting
-    text = re.sub(r'\[.*?\]\(.*?\)', '', text)  # Remove markdown links
-    text = re.sub(r'/u/\w+', '', text)  # Remove user mentions
-    text = re.sub(r'/r/\w+', '', text)  # Remove subreddit mentions
-    text = re.sub(r'\*\*?', '', text)  # Remove bold markers
-    text = re.sub(r'~~', '', text)  # Remove strikethrough
-    
-    # Remove extra whitespace
-    text = ' '.join(text.split())
-    
-    return text.strip()
+    if df is None or df.empty:
+        return {
+            "basic_stats": {
+                "total_comments": 0,
+                "total_score": 0,
+                "avg_score": 0.0,
+            },
+            "top_by_score": [],
+        }
 
+    total_comments = int(len(df))
+    total_score = int(df["score"].sum())
+    avg_score = float(df["score"].mean()) if total_comments else 0.0
 
-def combine_comments(tiktok_df: pd.DataFrame, reddit_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Combine TikTok and Reddit comments into a single DataFrame.
-    
-    Args:
-        tiktok_df: Processed TikTok comments
-        reddit_df: Processed Reddit comments
-        
-    Returns:
-        Combined DataFrame
-    """
-    # Ensure both DataFrames have the same columns
-    required_cols = ['text', 'likes', 'source']
-    
-    for df in [tiktok_df, reddit_df]:
-        for col in required_cols:
-            if col not in df.columns:
-                if col == 'likes':
-                    df[col] = 0
-                else:
-                    df[col] = ''
-    
-    combined = pd.concat([tiktok_df, reddit_df], ignore_index=True)
-    
-    return combined
+    basic_stats = {
+        "total_comments": total_comments,
+        "total_score": total_score,
+        "avg_score": avg_score,
+    }
+
+    sub = (
+        df.sort_values("score", ascending=False)
+        .head(50)[["comment_text", "score"]]
+        .copy()
+    )
+    top_by_score = sub.to_dict(orient="records")
+
+    return {
+        "basic_stats": basic_stats,
+        "top_by_score": top_by_score,
+    }

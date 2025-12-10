@@ -1,345 +1,155 @@
+# data_pipeline/reviews_amazon.py
+# -*- coding: utf-8 -*-
 """
-Amazon Product Reviews Processing
+处理 Amazon 商品评论：
+- 输入：原始 DataFrame（xlsx/csv）
+- 输出（clean_amazon_reviews）：
+    - asin         产品 ASIN（如果有）
+    - sku          变体 / SKU（如果有）
+    - rating       评分
+    - title        评论标题（可选）
+    - comment_text 评论内容
+    - date         评论日期
+- summarize_amazon_reviews：
+    - 评分分布
+    - top5_products         按评论数排序的产品
+    - top5_reviewers        （如有用户字段）
+"""
 
-This module processes Amazon product reviews to extract post-purchase feedback,
-must-have factors, critical pitfalls, and unmet needs.
-"""
+from __future__ import annotations
+
+from typing import Dict, List
 
 import pandas as pd
-import numpy as np
-from typing import Dict, List, Any
-from collections import Counter
-import re
 
 
-def detect_amazon_review_columns(df: pd.DataFrame) -> Dict[str, str]:
-    """
-    Detect Amazon review columns by matching common patterns.
-    
-    Args:
-        df: Raw DataFrame from uploaded Amazon reviews file
-        
-    Returns:
-        Dictionary mapping standardized field names to actual column names
-    """
-    column_mapping = {}
-    
-    patterns = {
-        'product_id': ['asin', 'product_id', 'product id'],
-        'text': ['text', 'review_text', 'review', 'body', 'comment'],
-        'rating': ['rating', 'star_rating', 'stars', 'score'],
-        'helpful': ['helpful', 'helpful_count', 'helpful_votes', 'upvotes'],
-        'date': ['date', 'review_date', 'created_at', 'timestamp'],
-        'country': ['country', 'location', 'marketplace'],
-        'title': ['title', 'review_title', 'summary'],
-        'verified': ['verified', 'verified_purchase'],
-    }
-    
-    df_columns_lower = {col.lower(): col for col in df.columns}
-    
-    for field, keywords in patterns.items():
-        for keyword in keywords:
-            if keyword in df_columns_lower:
-                column_mapping[field] = df_columns_lower[keyword]
-                break
-    
-    return column_mapping
+COLUMN_ALIASES: Dict[str, List[str]] = {
+    "asin": ["ASIN", "asin", "父ASIN", "商品ASIN"],
+    "sku": ["SKU", "变体", "sku", "Variation"],
+    "rating": ["评分", "星级", "rating", "star"],
+    "title": ["标题", "review_title", "title"],
+    "comment_text": ["评论内容", "评论", "review_text", "review"],
+    "date": ["日期", "评论日期", "date", "review_date"],
+    "reviewer": ["用户昵称", "用户名", "reviewer", "customer"],
+}
 
 
-def process_amazon_reviews(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Process and normalize Amazon product reviews.
-    
-    Args:
-        df: Raw DataFrame from uploaded Amazon reviews file
-        
-    Returns:
-        Normalized DataFrame with processed reviews
-    """
-    # Detect column mappings
-    column_mapping = detect_amazon_review_columns(df)
-    
-    # Create normalized DataFrame
-    normalized = pd.DataFrame()
-    
-    if 'product_id' in column_mapping:
-        normalized['product_id'] = df[column_mapping['product_id']].astype(str)
-    
-    if 'text' in column_mapping:
-        normalized['text'] = df[column_mapping['text']].astype(str).apply(clean_review_text)
+def _first_match(cols: List[str], candidates: List[str]) -> str | None:
+    for c in candidates:
+        if c in cols:
+            return c
+    return None
+
+
+def clean_amazon_reviews(raw_df: pd.DataFrame) -> pd.DataFrame:
+    if raw_df is None or raw_df.empty:
+        raise ValueError("Amazon 评论数据为空")
+
+    cols = list(raw_df.columns)
+    col_asin = _first_match(cols, COLUMN_ALIASES["asin"])
+    col_sku = _first_match(cols, COLUMN_ALIASES["sku"])
+    col_rating = _first_match(cols, COLUMN_ALIASES["rating"])
+    col_title = _first_match(cols, COLUMN_ALIASES["title"])
+    col_text = _first_match(cols, COLUMN_ALIASES["comment_text"])
+    col_date = _first_match(cols, COLUMN_ALIASES["date"])
+    col_reviewer = _first_match(cols, COLUMN_ALIASES["reviewer"])
+
+    if col_text is None:
+        raise ValueError(f"找不到 Amazon 评论文本列。当前列名：{cols}")
+
+    df = pd.DataFrame()
+    df["comment_text"] = raw_df[col_text].astype(str).str.strip()
+
+    if col_rating is not None:
+        df["rating"] = (
+            pd.to_numeric(raw_df[col_rating], errors="coerce")
+            .clip(lower=1, upper=5)
+            .fillna(0)
+        )
     else:
-        raise ValueError("Review text column not found in the uploaded file")
-    
-    if 'rating' in column_mapping:
-        normalized['rating'] = pd.to_numeric(df[column_mapping['rating']], errors='coerce')
-        # Normalize to 5-point scale if needed
-        if normalized['rating'].max() > 5:
-            normalized['rating'] = normalized['rating'] / normalized['rating'].max() * 5
+        df["rating"] = 0
+
+    if col_title is not None:
+        df["title"] = raw_df[col_title].astype(str).str.strip()
     else:
-        normalized['rating'] = 0
-    
-    if 'helpful' in column_mapping:
-        normalized['helpful'] = pd.to_numeric(df[column_mapping['helpful']], errors='coerce').fillna(0)
+        df["title"] = ""
+
+    if col_date is not None:
+        df["date"] = pd.to_datetime(raw_df[col_date], errors="coerce")
     else:
-        normalized['helpful'] = 0
-    
-    if 'date' in column_mapping:
-        normalized['date'] = pd.to_datetime(df[column_mapping['date']], errors='coerce')
-    
-    if 'country' in column_mapping:
-        normalized['country'] = df[column_mapping['country']].astype(str)
-    
-    if 'title' in column_mapping:
-        normalized['title'] = df[column_mapping['title']].astype(str)
-    
-    if 'verified' in column_mapping:
-        normalized['verified'] = df[column_mapping['verified']].astype(bool)
+        df["date"] = pd.NaT
+
+    if col_asin is not None:
+        df["asin"] = raw_df[col_asin].astype(str).fillna("UNKNOWN")
     else:
-        # Assume all are verified if not specified
-        normalized['verified'] = True
-    
-    # Add platform identifier
-    normalized['platform'] = 'amazon'
-    
-    # Filter valid reviews (with text)
-    normalized = normalized[normalized['text'].str.len() >= 10]
-    
-    return normalized
+        df["asin"] = "UNKNOWN"
+
+    if col_sku is not None:
+        df["sku"] = raw_df[col_sku].astype(str).fillna("")
+    else:
+        df["sku"] = ""
+
+    if col_reviewer is not None:
+        df["reviewer"] = raw_df[col_reviewer].astype(str).fillna("")
+    else:
+        df["reviewer"] = ""
+
+    # 去掉空评论
+    df = df[df["comment_text"].str.len() > 0].copy()
+    return df.reset_index(drop=True)
 
 
-def clean_review_text(text: str) -> str:
+def summarize_amazon_reviews(df: pd.DataFrame) -> dict:
     """
-    Clean review text.
-    
-    Args:
-        text: Raw review text
-        
-    Returns:
-        Cleaned text
+    结构化摘要：
+    - rating_distribution: 各星级数量
+    - top5_products: 按评论数排序的 asin
+    - top5_reviewers: 按评论数排序的 reviewer
     """
-    if not isinstance(text, str):
-        return ""
-    
-    # Remove URLs
-    text = re.sub(r'http\S+|www.\S+', '', text)
-    
-    # Remove excessive punctuation
-    text = re.sub(r'([!?.]){3,}', r'\1\1', text)
-    
-    # Remove extra whitespace
-    text = ' '.join(text.split())
-    
-    return text.strip()
+    if df is None or df.empty:
+        return {
+            "rating_distribution": {},
+            "top5_products": [],
+            "top5_reviewers": [],
+        }
 
+    # 评分分布
+    rating_counts = (
+        df["rating"]
+        .round()
+        .value_counts()
+        .sort_index()
+        .to_dict()
+    )
 
-def extract_must_have_factors(reviews: pd.DataFrame) -> List[Dict[str, Any]]:
-    """
-    Extract must-have factors from positive reviews (4-5 stars).
-    
-    Args:
-        reviews: DataFrame of processed reviews
-        
-    Returns:
-        List of must-have factors with supporting evidence
-    """
-    # Filter positive reviews
-    positive_reviews = reviews[reviews['rating'] >= 4].copy()
-    
-    if positive_reviews.empty:
-        return []
-    
-    # Keywords indicating key factors
-    factor_keywords = {
-        'quality': ['quality', 'well made', 'durable', 'sturdy', 'solid'],
-        'price_value': ['worth', 'value', 'price', 'affordable', 'reasonable'],
-        'easy_use': ['easy', 'simple', 'convenient', 'straightforward', 'user-friendly'],
-        'performance': ['works', 'performs', 'effective', 'efficient', 'reliable'],
-        'appearance': ['looks', 'beautiful', 'attractive', 'gorgeous', 'pretty'],
-        'comfort': ['comfortable', 'soft', 'cozy', 'fit', 'smooth'],
-        'fast_shipping': ['fast', 'quick', 'arrived', 'delivery', 'shipping'],
+    # 产品 Top5（按评论数）
+    if "asin" in df.columns:
+        prod_counts = (
+            df.groupby("asin")
+            .size()
+            .reset_index(name="count")
+            .sort_values("count", ascending=False)
+            .head(5)
+        )
+        top5_products = prod_counts.to_dict(orient="records")
+    else:
+        top5_products = []
+
+    # 评论者 Top5
+    if "reviewer" in df.columns and df["reviewer"].astype(str).str.len().gt(0).any():
+        rev_counts = (
+            df.groupby("reviewer")
+            .size()
+            .reset_index(name="count")
+            .sort_values("count", ascending=False)
+            .head(5)
+        )
+        top5_reviewers = rev_counts.to_dict(orient="records")
+    else:
+        top5_reviewers = []
+
+    return {
+        "rating_distribution": rating_counts,
+        "top5_products": top5_products,
+        "top5_reviewers": top5_reviewers,
     }
-    
-    factors = []
-    for factor_name, keywords in factor_keywords.items():
-        mentions = []
-        for _, review in positive_reviews.iterrows():
-            text_lower = review['text'].lower()
-            if any(kw in text_lower for kw in keywords):
-                mentions.append({
-                    'text': review['text'][:200],  # First 200 chars
-                    'rating': review['rating'],
-                    'helpful': review.get('helpful', 0),
-                })
-        
-        if mentions:
-            # Sort by helpful votes and rating
-            mentions = sorted(
-                mentions,
-                key=lambda x: (x['helpful'], x['rating']),
-                reverse=True
-            )[:3]
-            
-            factors.append({
-                'factor': factor_name,
-                'mention_count': len(mentions),
-                'examples': mentions,
-            })
-    
-    # Sort factors by mention count
-    factors = sorted(factors, key=lambda x: x['mention_count'], reverse=True)
-    
-    return factors[:5]
-
-
-def extract_critical_pitfalls(reviews: pd.DataFrame) -> List[Dict[str, Any]]:
-    """
-    Extract critical pitfalls from negative reviews (1-2 stars).
-    
-    Args:
-        reviews: DataFrame of processed reviews
-        
-    Returns:
-        List of critical pitfalls with examples
-    """
-    # Filter negative reviews
-    negative_reviews = reviews[reviews['rating'] <= 2].copy()
-    
-    if negative_reviews.empty:
-        return []
-    
-    # Keywords indicating problems
-    pitfall_keywords = {
-        'poor_quality': ['poor quality', 'cheap', 'broke', 'broken', 'fall apart', 'defective'],
-        'not_as_described': ['not as described', 'misleading', 'different', 'wrong', 'not what'],
-        'bad_fit': ['doesn\'t fit', 'too small', 'too large', 'wrong size', 'uncomfortable'],
-        'delivery_issues': ['late', 'damaged', 'never arrived', 'shipping', 'package'],
-        'overpriced': ['overpriced', 'too expensive', 'not worth', 'waste of money'],
-        'difficult_use': ['difficult', 'hard to use', 'complicated', 'confusing'],
-        'bad_smell': ['smell', 'odor', 'stink', 'chemical'],
-    }
-    
-    pitfalls = []
-    for pitfall_name, keywords in pitfall_keywords.items():
-        mentions = []
-        for _, review in negative_reviews.iterrows():
-            text_lower = review['text'].lower()
-            if any(kw in text_lower for kw in keywords):
-                mentions.append({
-                    'text': review['text'][:200],
-                    'rating': review['rating'],
-                    'helpful': review.get('helpful', 0),
-                })
-        
-        if mentions:
-            mentions = sorted(
-                mentions,
-                key=lambda x: (x['helpful'], -x['rating']),
-                reverse=True
-            )[:3]
-            
-            pitfalls.append({
-                'pitfall': pitfall_name,
-                'mention_count': len(mentions),
-                'examples': mentions,
-            })
-    
-    # Sort by mention count
-    pitfalls = sorted(pitfalls, key=lambda x: x['mention_count'], reverse=True)
-    
-    return pitfalls[:5]
-
-
-def extract_usage_scenarios(reviews: pd.DataFrame) -> List[Dict[str, Any]]:
-    """
-    Extract usage scenarios from reviews.
-    
-    Args:
-        reviews: DataFrame of processed reviews
-        
-    Returns:
-        List of usage scenarios
-    """
-    usage_keywords = {
-        'daily_use': ['daily', 'everyday', 'regular', 'routine'],
-        'special_occasions': ['wedding', 'party', 'event', 'occasion', 'celebration'],
-        'professional': ['work', 'office', 'professional', 'business', 'meeting'],
-        'outdoor': ['outdoor', 'outside', 'hiking', 'camping', 'travel'],
-        'home': ['home', 'house', 'indoor', 'bedroom', 'living room'],
-    }
-    
-    scenarios = []
-    for scenario_name, keywords in usage_keywords.items():
-        mentions = []
-        for _, review in reviews.iterrows():
-            text_lower = review['text'].lower()
-            if any(kw in text_lower for kw in keywords):
-                mentions.append({
-                    'text': review['text'][:200],
-                    'rating': review['rating'],
-                })
-        
-        if mentions:
-            scenarios.append({
-                'scenario': scenario_name,
-                'mention_count': len(mentions),
-                'avg_rating': np.mean([m['rating'] for m in mentions]),
-            })
-    
-    scenarios = sorted(scenarios, key=lambda x: x['mention_count'], reverse=True)
-    
-    return scenarios[:5]
-
-
-def extract_unmet_needs(reviews: pd.DataFrame) -> List[Dict[str, Any]]:
-    """
-    Extract unmet needs and feature requests from reviews.
-    
-    Args:
-        reviews: DataFrame of processed reviews
-        
-    Returns:
-        List of unmet needs
-    """
-    # Keywords indicating unmet needs
-    need_patterns = [
-        r'wish (?:it|there) (?:was|were|had)',
-        r'would be (?:better|nice|great) if',
-        r'should have',
-        r'needs? (?:to|more)',
-        r'missing',
-        r'lacking',
-        r'could use',
-    ]
-    
-    unmet_needs = []
-    for _, review in reviews.iterrows():
-        text = review['text']
-        for pattern in need_patterns:
-            matches = re.finditer(pattern, text.lower())
-            for match in matches:
-                # Extract sentence containing the match
-                start = max(0, match.start() - 50)
-                end = min(len(text), match.end() + 100)
-                snippet = text[start:end].strip()
-                
-                unmet_needs.append({
-                    'text': snippet,
-                    'rating': review['rating'],
-                })
-    
-    # Group similar needs (simplified)
-    if not unmet_needs:
-        return []
-    
-    # Return top unmet needs by frequency
-    need_texts = [need['text'] for need in unmet_needs]
-    common_needs = Counter(need_texts).most_common(5)
-    
-    result = []
-    for text, count in common_needs:
-        result.append({
-            'need': text,
-            'mention_count': count,
-        })
-    
-    return result

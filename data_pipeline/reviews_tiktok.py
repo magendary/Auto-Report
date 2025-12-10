@@ -1,158 +1,107 @@
+# data_pipeline/reviews_tiktok.py
+# -*- coding: utf-8 -*-
 """
-TikTok Shop Product Reviews Processing
+处理 TikTok Shop 商品评论：
+- 输入：原始 DataFrame（例：评分 / 评论 / 日期 / SKU）
+- 输出（clean_tiktok_reviews）：
+    - rating
+    - comment_text
+    - date
+    - sku
+- summarize_tiktok_reviews：
+    - rating_distribution
+    - top5_sku_by_reviews
+"""
 
-This module processes TikTok Shop product reviews to extract post-purchase feedback
-and insights.
-"""
+from __future__ import annotations
+
+from typing import Dict, List
 
 import pandas as pd
-import numpy as np
-from typing import Dict, List, Any
-import re
 
 
-def detect_tiktok_review_columns(df: pd.DataFrame) -> Dict[str, str]:
-    """
-    Detect TikTok Shop review columns by matching common patterns.
-    
-    Args:
-        df: Raw DataFrame from uploaded TikTok reviews file
-        
-    Returns:
-        Dictionary mapping standardized field names to actual column names
-    """
-    column_mapping = {}
-    
-    patterns = {
-        'product_id': ['product_id', 'product id', 'id', 'sku'],
-        'text': ['text', 'review_text', 'review', 'content', 'comment'],
-        'rating': ['rating', 'star_rating', 'stars', 'score'],
-        'helpful': ['helpful', 'helpful_count', 'likes', 'thumbs_up'],
-        'date': ['date', 'review_date', 'created_at', 'create_time'],
-        'country': ['country', 'location', 'region'],
-        'user_id': ['user_id', 'user', 'reviewer'],
+COLUMN_ALIASES: Dict[str, List[str]] = {
+    "rating": ["评分", "星级", "rating", "star"],
+    "comment_text": ["评论", "评论内容", "content", "review_text"],
+    "date": ["日期", "时间", "评论时间", "date"],
+    "sku": ["SKU", "sku", "变体", "规格"],
+}
+
+
+def _first_match(cols: List[str], candidates: List[str]) -> str | None:
+    for c in candidates:
+        if c in cols:
+            return c
+    return None
+
+
+def clean_tiktok_reviews(raw_df: pd.DataFrame) -> pd.DataFrame:
+    if raw_df is None or raw_df.empty:
+        raise ValueError("TikTok 商品评论数据为空")
+
+    cols = list(raw_df.columns)
+    col_rating = _first_match(cols, COLUMN_ALIASES["rating"])
+    col_text = _first_match(cols, COLUMN_ALIASES["comment_text"])
+    col_date = _first_match(cols, COLUMN_ALIASES["date"])
+    col_sku = _first_match(cols, COLUMN_ALIASES["sku"])
+
+    if col_text is None:
+        raise ValueError(f"找不到 TikTok 评论内容列。当前列名：{cols}")
+
+    df = pd.DataFrame()
+    df["comment_text"] = raw_df[col_text].astype(str).str.strip()
+
+    if col_rating is not None:
+        df["rating"] = (
+            pd.to_numeric(raw_df[col_rating], errors="coerce")
+            .clip(lower=1, upper=5)
+            .fillna(0)
+        )
+    else:
+        df["rating"] = 0
+
+    if col_date is not None:
+        df["date"] = pd.to_datetime(raw_df[col_date], errors="coerce")
+    else:
+        df["date"] = pd.NaT
+
+    if col_sku is not None:
+        df["sku"] = raw_df[col_sku].astype(str).fillna("")
+    else:
+        df["sku"] = ""
+
+    df = df[df["comment_text"].str.len() > 0].copy()
+    return df.reset_index(drop=True)
+
+
+def summarize_tiktok_reviews(df: pd.DataFrame) -> dict:
+    if df is None or df.empty:
+        return {
+            "rating_distribution": {},
+            "top5_sku_by_reviews": [],
+        }
+
+    rating_counts = (
+        df["rating"]
+        .round()
+        .value_counts()
+        .sort_index()
+        .to_dict()
+    )
+
+    if "sku" in df.columns:
+        sku_counts = (
+            df.groupby("sku")
+            .size()
+            .reset_index(name="count")
+            .sort_values("count", ascending=False)
+            .head(5)
+        )
+        top5_sku = sku_counts.to_dict(orient="records")
+    else:
+        top5_sku = []
+
+    return {
+        "rating_distribution": rating_counts,
+        "top5_sku_by_reviews": top5_sku,
     }
-    
-    df_columns_lower = {col.lower(): col for col in df.columns}
-    
-    for field, keywords in patterns.items():
-        for keyword in keywords:
-            if keyword in df_columns_lower:
-                column_mapping[field] = df_columns_lower[keyword]
-                break
-    
-    return column_mapping
-
-
-def process_tiktok_reviews(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Process and normalize TikTok Shop product reviews.
-    
-    Args:
-        df: Raw DataFrame from uploaded TikTok reviews file
-        
-    Returns:
-        Normalized DataFrame with processed reviews
-    """
-    # Detect column mappings
-    column_mapping = detect_tiktok_review_columns(df)
-    
-    # Create normalized DataFrame
-    normalized = pd.DataFrame()
-    
-    if 'product_id' in column_mapping:
-        normalized['product_id'] = df[column_mapping['product_id']].astype(str)
-    
-    if 'text' in column_mapping:
-        normalized['text'] = df[column_mapping['text']].astype(str).apply(clean_review_text)
-    else:
-        raise ValueError("Review text column not found in the uploaded file")
-    
-    if 'rating' in column_mapping:
-        normalized['rating'] = pd.to_numeric(df[column_mapping['rating']], errors='coerce')
-        # Normalize to 5-point scale if needed
-        if normalized['rating'].max() > 5:
-            normalized['rating'] = normalized['rating'] / normalized['rating'].max() * 5
-    else:
-        normalized['rating'] = 0
-    
-    if 'helpful' in column_mapping:
-        normalized['helpful'] = pd.to_numeric(df[column_mapping['helpful']], errors='coerce').fillna(0)
-    else:
-        normalized['helpful'] = 0
-    
-    if 'date' in column_mapping:
-        normalized['date'] = pd.to_datetime(df[column_mapping['date']], errors='coerce')
-    
-    if 'country' in column_mapping:
-        normalized['country'] = df[column_mapping['country']].astype(str)
-    
-    # All TikTok Shop reviews are from verified purchases
-    normalized['verified'] = True
-    
-    # Add platform identifier
-    normalized['platform'] = 'tiktok'
-    
-    # Filter valid reviews
-    normalized = normalized[normalized['text'].str.len() >= 10]
-    
-    return normalized
-
-
-def clean_review_text(text: str) -> str:
-    """
-    Clean TikTok review text.
-    
-    Args:
-        text: Raw review text
-        
-    Returns:
-        Cleaned text
-    """
-    if not isinstance(text, str):
-        return ""
-    
-    # Remove emojis
-    text = re.sub(r'[\U00010000-\U0010ffff]+', ' ', text)
-    
-    # Remove URLs
-    text = re.sub(r'http\S+|www.\S+', '', text)
-    
-    # Remove excessive punctuation
-    text = re.sub(r'([!?.]){3,}', r'\1\1', text)
-    
-    # Remove extra whitespace
-    text = ' '.join(text.split())
-    
-    return text.strip()
-
-
-def combine_reviews(amazon_df: pd.DataFrame, tiktok_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Combine Amazon and TikTok reviews into a single DataFrame.
-    
-    Args:
-        amazon_df: Processed Amazon reviews
-        tiktok_df: Processed TikTok reviews
-        
-    Returns:
-        Combined DataFrame with all reviews
-    """
-    # Ensure both DataFrames have the same columns
-    required_cols = ['text', 'rating', 'helpful', 'platform', 'verified']
-    
-    for df in [amazon_df, tiktok_df]:
-        for col in required_cols:
-            if col not in df.columns:
-                if col == 'rating':
-                    df[col] = 0
-                elif col == 'helpful':
-                    df[col] = 0
-                elif col == 'verified':
-                    df[col] = True
-                else:
-                    df[col] = ''
-    
-    combined = pd.concat([amazon_df, tiktok_df], ignore_index=True)
-    
-    return combined
