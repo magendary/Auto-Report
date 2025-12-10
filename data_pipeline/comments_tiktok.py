@@ -15,6 +15,7 @@ import re
 def detect_tiktok_comment_columns(df: pd.DataFrame) -> Dict[str, str]:
     """
     Detect TikTok comment columns by matching common patterns.
+    Supports both Chinese and English column names.
     
     Args:
         df: Raw DataFrame from uploaded TikTok comments file
@@ -22,24 +23,25 @@ def detect_tiktok_comment_columns(df: pd.DataFrame) -> Dict[str, str]:
     Returns:
         Dictionary mapping standardized field names to actual column names
     """
-    column_mapping = {}
-    
-    patterns = {
-        'text': ['text', 'comment', 'comment_text', 'content'],
-        'likes': ['likes', 'like_count', 'digg_count', 'thumbs_up'],
-        'created_at': ['created_at', 'create_time', 'timestamp', 'date'],
-        'user_id': ['user_id', 'user', 'username', 'author'],
+    col_map_candidates = {
+        "video_id":    ["video_id", "视频ID"],
+        "comment_id":  ["comment_id", "评论ID"],
+        "user_id":     ["user_id", "用户ID"],
+        "username":    ["username", "用户昵称", "昵称"],
+        "text":        ["comment_text", "text", "评论内容", "内容"],
+        "created_at":  ["created_at", "time", "发布时间"],
+        "like_count":  ["like_count", "likes", "点赞数"],
+        "reply_count": ["reply_count", "replies", "回复数量"],
     }
     
-    df_columns_lower = {col.lower(): col for col in df.columns}
-    
-    for field, keywords in patterns.items():
-        for keyword in keywords:
-            if keyword in df_columns_lower:
-                column_mapping[field] = df_columns_lower[keyword]
+    resolved = {}
+    for std_name, candidates in col_map_candidates.items():
+        for c in candidates:
+            if c in df.columns:
+                resolved[std_name] = c
                 break
     
-    return column_mapping
+    return resolved
 
 
 def clean_comment_text(text: str) -> str:
@@ -102,38 +104,56 @@ def is_valid_comment(text: str, min_length: int = 5) -> bool:
 
 def process_tiktok_comments(df: pd.DataFrame) -> pd.DataFrame:
     """
+    统一清洗 TikTok 视频评论数据。
+    支持中英列名（视频ID/评论内容/点赞数等），返回标准字段：
+    video_id, comment_id, user_id, username, text, created_at, like_count, reply_count, source
+    
     Process and normalize TikTok video comments.
+    Supports both Chinese and English column names.
     
     Args:
         df: Raw DataFrame from uploaded TikTok comments file
         
     Returns:
-        Normalized DataFrame with cleaned comments
+        Normalized DataFrame with standard fields:
+        video_id, comment_id, user_id, username, text, created_at, like_count, reply_count, source
     """
     # Detect column mappings
-    column_mapping = detect_tiktok_comment_columns(df)
+    resolved = detect_tiktok_comment_columns(df)
+    
+    # 文本列是必须要有的 / Text column is required
+    if "text" not in resolved:
+        raise ValueError(
+            f"Comment text column not found. Available columns: {list(df.columns)}"
+        )
     
     # Create normalized DataFrame
     normalized = pd.DataFrame()
     
-    if 'text' in column_mapping:
-        normalized['text'] = df[column_mapping['text']].astype(str).apply(clean_comment_text)
-    else:
-        raise ValueError("Comment text column not found in the uploaded file")
+    # 按已匹配到的列进行拷贝 / Copy matched columns
+    for std_name, src_col in resolved.items():
+        if std_name == "text":
+            # Apply text cleaning to comment text
+            normalized[std_name] = df[src_col].astype(str).apply(clean_comment_text)
+        else:
+            normalized[std_name] = df[src_col]
     
-    if 'likes' in column_mapping:
-        normalized['likes'] = pd.to_numeric(df[column_mapping['likes']], errors='coerce').fillna(0)
-    else:
-        normalized['likes'] = 0
+    # 基础类型转换 / Basic type conversions
+    if "created_at" in normalized.columns:
+        normalized["created_at"] = pd.to_datetime(normalized["created_at"], errors="coerce")
     
-    if 'created_at' in column_mapping:
-        normalized['created_at'] = pd.to_datetime(df[column_mapping['created_at']], errors='coerce')
+    for num_col in ["like_count", "reply_count"]:
+        if num_col in normalized.columns:
+            normalized[num_col] = pd.to_numeric(normalized[num_col], errors="coerce").fillna(0).astype(int)
+        else:
+            # Add column with default value if not present
+            normalized[num_col] = 0
     
-    if 'user_id' in column_mapping:
-        normalized['user_id'] = df[column_mapping['user_id']].astype(str)
+    # Ensure backwards compatibility: add 'likes' column as alias for 'like_count'
+    if 'like_count' in normalized.columns:
+        normalized['likes'] = normalized['like_count']
     
-    # Add source identifier
-    normalized['source'] = 'tiktok'
+    normalized["source"] = "tiktok"
     
     # Filter valid comments
     normalized['is_valid'] = normalized['text'].apply(is_valid_comment)
