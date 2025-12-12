@@ -251,7 +251,7 @@ function App() {
                 fill="#8884d8"
                 dataKey="count"
               >
-                {amazonRatingData.map((entry, index) => (
+                {amazonRatingData.map((_entry, index) => (
                   <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>
@@ -277,7 +277,7 @@ function App() {
                 fill="#8884d8"
                 dataKey="count"
               >
-                {tiktokRatingData.map((entry, index) => (
+                {tiktokRatingData.map((_entry, index) => (
                   <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>
