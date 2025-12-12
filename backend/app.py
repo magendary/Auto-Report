@@ -238,22 +238,17 @@ def generate_report():
 def download_report(filename):
     """Download generated report"""
     try:
-        # Validate filename to prevent path traversal
-        import os.path
-        if '..' in filename or '/' in filename or '\\' in filename:
-            return jsonify({
-                'success': False,
-                'error': 'Invalid filename'
-            }), 400
+        # Use only basename to prevent path traversal
+        safe_filename = os.path.basename(filename)
         
         # Ensure filename ends with .pdf
-        if not filename.endswith('.pdf'):
+        if not safe_filename.endswith('.pdf'):
             return jsonify({
                 'success': False,
                 'error': 'Only PDF files are allowed'
             }), 400
         
-        report_path = os.path.join(report_generator.output_dir, filename)
+        report_path = os.path.join(report_generator.output_dir, safe_filename)
         
         # Verify the path is within the reports directory
         real_report_path = os.path.realpath(report_path)
@@ -274,7 +269,7 @@ def download_report(filename):
             report_path,
             mimetype='application/pdf',
             as_attachment=True,
-            download_name=filename
+            download_name=safe_filename
         )
     except Exception as e:
         return jsonify({

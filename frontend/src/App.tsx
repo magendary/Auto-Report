@@ -15,6 +15,8 @@ import {
 } from 'recharts';
 
 const COLORS = ['#667eea', '#764ba2', '#f093fb', '#4facfe', '#43e97b', '#fa709a'];
+const MAX_CATEGORY_NAME_LENGTH = 20;
+const MAX_TIKTOK_CATEGORY_NAME_LENGTH = 30;
 
 function App() {
   const [summary, setSummary] = useState<SummaryData | null>(null);
@@ -87,14 +89,14 @@ function App() {
   // Prepare chart data
   const amazonCategoriesData = summary.amazon_sales?.top_categories
     ? Object.entries(summary.amazon_sales.top_categories).map(([name, value]) => ({
-        name: name.substring(0, 20) + (name.length > 20 ? '...' : ''),
+        name: name.substring(0, MAX_CATEGORY_NAME_LENGTH) + (name.length > MAX_CATEGORY_NAME_LENGTH ? '...' : ''),
         value
       }))
     : [];
 
   const tiktokCategoriesData = summary.tiktok_sales?.top_categories
     ? Object.entries(summary.tiktok_sales.top_categories).map(([name, value]) => ({
-        name: name.substring(0, 30) + (name.length > 30 ? '...' : ''),
+        name: name.substring(0, MAX_TIKTOK_CATEGORY_NAME_LENGTH) + (name.length > MAX_TIKTOK_CATEGORY_NAME_LENGTH ? '...' : ''),
         value
       }))
     : [];

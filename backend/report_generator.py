@@ -87,9 +87,8 @@ class ReportGenerator:
         if not output_filename:
             output_filename = f"auto_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         
-        # Validate filename to prevent path traversal
-        if '..' in output_filename or '/' in output_filename or '\\' in output_filename:
-            raise ValueError("Invalid filename: contains path separators")
+        # Use only the basename to prevent path traversal
+        output_filename = os.path.basename(output_filename)
         
         if not output_filename.endswith('.pdf'):
             output_filename += '.pdf'
