@@ -38,6 +38,12 @@ fi
 echo ""
 echo "1. 启动后端服务... / Starting backend service..."
 cd backend
+
+# Set development environment variables
+export FLASK_DEBUG=True
+export FLASK_HOST=0.0.0.0
+export FLASK_PORT=5000
+
 python3 app.py &
 BACKEND_PID=$!
 echo "后端服务已启动 (PID: $BACKEND_PID) / Backend started (PID: $BACKEND_PID)"

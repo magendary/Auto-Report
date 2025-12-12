@@ -28,6 +28,7 @@ ENV/
 # Backend
 backend/reports/*.png
 backend/reports/*.pdf
+backend/.env
 
 # Frontend
 frontend/node_modules/
@@ -35,6 +36,7 @@ frontend/dist/
 frontend/.vite/
 frontend/yarn.lock
 frontend/package-lock.json
+frontend/.env
 
 # IDE
 .vscode/

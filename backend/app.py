@@ -314,10 +314,18 @@ if __name__ == '__main__':
     # Create reports directory
     os.makedirs('reports', exist_ok=True)
     
+    # Get configuration from environment variables
+    debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+    host = os.environ.get('FLASK_HOST', '127.0.0.1')  # Default to localhost for security
+    port = int(os.environ.get('FLASK_PORT', '5000'))
+    
     # Run the Flask app
     # Note: For production, use a production WSGI server like gunicorn
-    # and disable debug mode
+    # and set FLASK_DEBUG=False
     print("Starting Auto-Report API server...")
-    print("API will be available at http://localhost:5000")
-    print("WARNING: This is a development server. Do not use in production.")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    print(f"API will be available at http://{host}:{port}")
+    
+    if debug_mode:
+        print("WARNING: Running in DEBUG mode. Do not use in production!")
+    
+    app.run(debug=debug_mode, host=host, port=port)
