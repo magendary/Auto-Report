@@ -3,6 +3,21 @@
 # Auto-Report 启动脚本 / Startup Script
 # 这个脚本用于启动后端和前端服务
 
+# Trap SIGINT (Ctrl+C) to clean up processes
+cleanup() {
+    echo ""
+    echo "正在停止服务... / Stopping services..."
+    if [ ! -z "$BACKEND_PID" ]; then
+        kill $BACKEND_PID 2>/dev/null
+    fi
+    if [ ! -z "$FRONTEND_PID" ]; then
+        kill $FRONTEND_PID 2>/dev/null
+    fi
+    exit 0
+}
+
+trap cleanup SIGINT
+
 echo "========================================="
 echo "Auto-Report 启动中... / Starting..."
 echo "========================================="

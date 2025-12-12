@@ -13,7 +13,11 @@ class DataCleaner:
     """Main class for cleaning e-commerce data from multiple sources"""
     
     def __init__(self, data_dir: str = ".."):
-        self.data_dir = data_dir
+        # Use absolute path for security
+        if os.path.isabs(data_dir):
+            self.data_dir = data_dir
+        else:
+            self.data_dir = os.path.abspath(data_dir)
         self.cleaned_data = {}
     
     def clean_amazon_sales(self) -> pd.DataFrame:

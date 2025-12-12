@@ -238,7 +238,31 @@ def generate_report():
 def download_report(filename):
     """Download generated report"""
     try:
+        # Validate filename to prevent path traversal
+        import os.path
+        if '..' in filename or '/' in filename or '\\' in filename:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid filename'
+            }), 400
+        
+        # Ensure filename ends with .pdf
+        if not filename.endswith('.pdf'):
+            return jsonify({
+                'success': False,
+                'error': 'Only PDF files are allowed'
+            }), 400
+        
         report_path = os.path.join(report_generator.output_dir, filename)
+        
+        # Verify the path is within the reports directory
+        real_report_path = os.path.realpath(report_path)
+        real_reports_dir = os.path.realpath(report_generator.output_dir)
+        if not real_report_path.startswith(real_reports_dir):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid file path'
+            }), 400
         
         if not os.path.exists(report_path):
             return jsonify({
@@ -296,6 +320,9 @@ if __name__ == '__main__':
     os.makedirs('reports', exist_ok=True)
     
     # Run the Flask app
+    # Note: For production, use a production WSGI server like gunicorn
+    # and disable debug mode
     print("Starting Auto-Report API server...")
     print("API will be available at http://localhost:5000")
+    print("WARNING: This is a development server. Do not use in production.")
     app.run(debug=True, host='0.0.0.0', port=5000)
